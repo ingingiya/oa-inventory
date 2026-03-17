@@ -94,7 +94,7 @@ function buildRows(records:DailyRecord[], initialStockMap:Record<string,number>)
     const sum7=recent7.reduce((s,r)=>s+(r.outbound[m.barcode]?.qty??0),0);
     const avg7=recent7.length>0?Math.round((sum7/recent7.length)*10)/10:0;
     const totalOutbound=records.reduce((s,r)=>s+(r.outbound[m.barcode]?.qty??0),0);
-    const initialStock=initialStockMap[m.barcode]??0;
+    const initialStock=initialStockMap[m.barcode]??m.planOutbound;
     const currentStock=initialStock>0?initialStock-totalOutbound:-1;
     return{...m,actualOutbound:ld?.qty??0,revenue:ld?.revenue??0,orders:ld?.orders??0,avg7,initialStock,currentStock};
   });
