@@ -1,33 +1,26 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import { createClient } from "@supabase/supabase-js";
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+const getSupabase = () => createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""
 );
 
 interface SkuRow {
-  category: string;
-  name: string;
-  barcode: string;
-  dailySales: number;
-  plan15: number;
-  planOutbound: number;
-  actualOutbound: number;
-  revenue: number;
-  orders: number;
-  avg7: number;
+  category: string; name: string; barcode: string;
+  dailySales: number; plan15: number; planOutbound: number;
+  actualOutbound: number; revenue: number; orders: number; avg7: number;
+  initialStock: number; currentStock: number;
 }
-
 interface DailyRecord {
   date: string;
   outbound: Record<string, { qty: number; revenue: number; orders: number }>;
 }
 
-const MASTER_DATA: Omit<SkuRow, "actualOutbound"|"revenue"|"orders"|"avg7">[] = [
+const MASTER_DATA: Omit<SkuRow,"actualOutbound"|"revenue"|"orders"|"avg7"|"initialStock"|"currentStock">[] = [
   { category:"이미용", name:"오아소닉플로우-베이지",         barcode:"8809822427970", dailySales:30, plan15:450,  planOutbound:500 },
   { category:"이미용", name:"오아소닉플로우-핑크",            barcode:"8809822428823", dailySales:15, plan15:225,  planOutbound:300 },
   { category:"이미용", name:"오아소닉플로우-그레이",          barcode:"8809822428816", dailySales:15, plan15:225,  planOutbound:300 },
@@ -42,21 +35,21 @@ const MASTER_DATA: Omit<SkuRow, "actualOutbound"|"revenue"|"orders"|"avg7">[] = 
   { category:"이미용", name:"오아미니핏고데기-핑크",          barcode:"8809822428106", dailySales:5,  plan15:75,   planOutbound:50  },
   { category:"이미용", name:"오아베이직빗고데기-베이지",      barcode:"8809822429523", dailySales:5,  plan15:75,   planOutbound:50  },
   { category:"이미용", name:"오아베이직빗고데기-블루",        barcode:"8809822429530", dailySales:5,  plan15:75,   planOutbound:50  },
-  { category:"욕실", name:"오아클린이워터B-UV-포그밀크",        barcode:"8809822428724", dailySales:60, plan15:900,  planOutbound:974 },
-  { category:"욕실", name:"오아클린이워터B-UV-차콜스톤",        barcode:"8809822428748", dailySales:70, plan15:750,  planOutbound:200 },
-  { category:"욕실", name:"오아클린이워터B-UV-클라우디블루",    barcode:"8809822428731", dailySales:50, plan15:750,  planOutbound:200 },
-  { category:"욕실", name:"오아클린이워터B (거치대패키지)",       barcode:"8809487308195", dailySales:40, plan15:600,  planOutbound:974 },
+  { category:"욕실", name:"오아클린이워터B (거치대패키지)",   barcode:"8809487308195", dailySales:40, plan15:600,  planOutbound:974 },
+  { category:"욕실", name:"오아클린이워터B-UV-포그밀크",     barcode:"8809822428724", dailySales:60, plan15:900,  planOutbound:974 },
+  { category:"욕실", name:"오아클린이워터B-UV-차콜스톤",     barcode:"8809822428748", dailySales:70, plan15:750,  planOutbound:200 },
+  { category:"욕실", name:"오아클린이워터B-UV-클라우디블루", barcode:"8809822428731", dailySales:50, plan15:750,  planOutbound:200 },
   { category:"욕실", name:"오아클린이소프트리필칫솔모2P-화이트", barcode:"8809487307518", dailySales:85, plan15:1275, planOutbound:600 },
   { category:"욕실", name:"오아클린이소프트리필칫솔모2P-블랙",  barcode:"8809487307808", dailySales:55, plan15:825,  planOutbound:400 },
   { category:"욕실", name:"오아클린이소프트미세모2p-화이트",    barcode:"8809487308751", dailySales:35, plan15:525,  planOutbound:300 },
-  { category:"욕실", name:"오아클린이스윙-블랙",                barcode:"8809822427116", dailySales:20, plan15:300,  planOutbound:480 },
-  { category:"욕실", name:"오아클린이스윙-화이트",              barcode:"8809822427109", dailySales:20, plan15:300,  planOutbound:480 },
-  { category:"욕실", name:"오아클린이소프트미세모2p-블랙",      barcode:"8809487308768", dailySales:20, plan15:300,  planOutbound:200 },
-  { category:"욕실", name:"오아클린이퓨어Pro-화이트",           barcode:"8809822420087", dailySales:20, plan15:150,  planOutbound:300 },
-  { category:"욕실", name:"오아클린이워터전용제트팁2P",          barcode:"8809487308300", dailySales:20, plan15:300,  planOutbound:300 },
-  { category:"욕실", name:"오아클린이퓨어Pro-클라우디블루",     barcode:"8809822429264", dailySales:20, plan15:75,   planOutbound:200 },
-  { category:"욕실", name:"오아클린이퓨어Pro-코튼핑크",         barcode:"8809822429257", dailySales:15, plan15:75,   planOutbound:200 },
-  { category:"욕실", name:"오아클린이워터전용5종팁세트",         barcode:"8809487308317", dailySales:15, plan15:225,  planOutbound:200 },
+  { category:"욕실", name:"오아클린이스윙-블랙",               barcode:"8809822427116", dailySales:20, plan15:300,  planOutbound:480 },
+  { category:"욕실", name:"오아클린이스윙-화이트",             barcode:"8809822427109", dailySales:20, plan15:300,  planOutbound:480 },
+  { category:"욕실", name:"오아클린이소프트미세모2p-블랙",     barcode:"8809487308768", dailySales:20, plan15:300,  planOutbound:200 },
+  { category:"욕실", name:"오아클린이퓨어Pro-화이트",          barcode:"8809822420087", dailySales:20, plan15:150,  planOutbound:300 },
+  { category:"욕실", name:"오아클린이워터전용제트팁2P",         barcode:"8809487308300", dailySales:20, plan15:300,  planOutbound:300 },
+  { category:"욕실", name:"오아클린이퓨어Pro-클라우디블루",    barcode:"8809822429264", dailySales:20, plan15:75,   planOutbound:200 },
+  { category:"욕실", name:"오아클린이퓨어Pro-코튼핑크",        barcode:"8809822429257", dailySales:15, plan15:75,   planOutbound:200 },
+  { category:"욕실", name:"오아클린이워터전용5종팁세트",        barcode:"8809487308317", dailySales:15, plan15:225,  planOutbound:200 },
   { category:"계절", name:"오아아이스볼트맥스-베이지", barcode:"8809822426591", dailySales:30, plan15:450, planOutbound:640 },
   { category:"계절", name:"오아에어쿨핸디",           barcode:"8809822424672", dailySales:20, plan15:300, planOutbound:0   },
   { category:"계절", name:"오아아이스볼트-베이지",    barcode:"8809822426607", dailySales:15, plan15:225, planOutbound:0   },
@@ -80,216 +73,254 @@ const MASTER_DATA: Omit<SkuRow, "actualOutbound"|"revenue"|"orders"|"avg7">[] = 
   { category:"인테리어", name:"오아무선모던LED시계R-베이지", barcode:"8809822426799", dailySales:10, plan15:150, planOutbound:150 },
 ];
 
-const CAT_COLOR: Record<string, { bg: string; text: string; dot: string }> = {
-  이미용:   { bg:"#E6F1FB", text:"#185FA5", dot:"#378ADD" },
-  욕실:     { bg:"#E1F5EE", text:"#0F6E56", dot:"#1D9E75" },
-  계절:     { bg:"#FAEEDA", text:"#854F0B", dot:"#EF9F27" },
-  건강:     { bg:"#FBEAF0", text:"#993556", dot:"#D4537E" },
-  모바일:   { bg:"#EEEDFE", text:"#534AB7", dot:"#7F77DD" },
-  인테리어: { bg:"#F1EFE8", text:"#5F5E5A", dot:"#888780" },
+const CAT_COLOR: Record<string,{bg:string;text:string;dot:string}> = {
+  이미용:{bg:"#E6F1FB",text:"#185FA5",dot:"#378ADD"},
+  욕실:{bg:"#E1F5EE",text:"#0F6E56",dot:"#1D9E75"},
+  계절:{bg:"#FAEEDA",text:"#854F0B",dot:"#EF9F27"},
+  건강:{bg:"#FBEAF0",text:"#993556",dot:"#D4537E"},
+  모바일:{bg:"#EEEDFE",text:"#534AB7",dot:"#7F77DD"},
+  인테리어:{bg:"#F1EFE8",text:"#5F5E5A",dot:"#888780"},
 };
-const D = { bg:"#F1EFE8", text:"#5F5E5A", dot:"#888780" };
-const cs = (cat: string) => CAT_COLOR[cat] ?? D;
-const fmt = (n: number) => n.toLocaleString("ko-KR");
-const fmtDate = (d: string) => d.slice(5).replace("-", "/");
+const D={bg:"#F1EFE8",text:"#5F5E5A",dot:"#888780"};
+const cs=(cat:string)=>CAT_COLOR[cat]??D;
+const fmt=(n:number)=>n.toLocaleString("ko-KR");
+const fmtDate=(d:string)=>d.slice(5).replace("-","/");
 
-function buildRows(records: DailyRecord[]): SkuRow[] {
-  const recent7 = records.slice(-7);
-  const latest = records[records.length - 1];
-  return MASTER_DATA.map(m => {
-    const latestData = latest?.outbound[m.barcode];
-    const sum7 = recent7.reduce((s, r) => s + (r.outbound[m.barcode]?.qty ?? 0), 0);
-    const avg7 = recent7.length > 0 ? Math.round((sum7 / recent7.length) * 10) / 10 : 0;
-    return {
-      ...m,
-      actualOutbound: latestData?.qty ?? 0,
-      revenue: latestData?.revenue ?? 0,
-      orders: latestData?.orders ?? 0,
-      avg7,
-    };
+function buildRows(records:DailyRecord[], initialStockMap:Record<string,number>):SkuRow[]{
+  const recent7=records.slice(-7);
+  const latest=records[records.length-1];
+  return MASTER_DATA.map(m=>{
+    const ld=latest?.outbound[m.barcode];
+    const sum7=recent7.reduce((s,r)=>s+(r.outbound[m.barcode]?.qty??0),0);
+    const avg7=recent7.length>0?Math.round((sum7/recent7.length)*10)/10:0;
+    const totalOutbound=records.reduce((s,r)=>s+(r.outbound[m.barcode]?.qty??0),0);
+    const initialStock=initialStockMap[m.barcode]??0;
+    const currentStock=initialStock>0?initialStock-totalOutbound:-1;
+    return{...m,actualOutbound:ld?.qty??0,revenue:ld?.revenue??0,orders:ld?.orders??0,avg7,initialStock,currentStock};
   });
 }
 
-const TH: React.CSSProperties = { textAlign:"left", padding:"9px 14px", fontSize:11, fontWeight:500, color:"#aaa", whiteSpace:"nowrap", background:"#fdfcfa" };
-const TD: React.CSSProperties = { padding:"10px 14px", verticalAlign:"middle" };
+const TH:React.CSSProperties={textAlign:"left",padding:"9px 14px",fontSize:11,fontWeight:500,color:"#aaa",whiteSpace:"nowrap",background:"#fdfcfa"};
+const TD:React.CSSProperties={padding:"10px 14px",verticalAlign:"middle"};
 
-export default function Home() {
-  const [records, setRecords] = useState<DailyRecord[]>([]);
-  const [activeTab, setActiveTab] = useState("전체");
-  const [view, setView] = useState<"table"|"history">("table");
-  const [sortKey, setSortKey] = useState<"actualOutbound"|"revenue"|"avg7"|"">("actualOutbound");
-  const [uploading, setUploading] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [toast, setToast] = useState("");
+export default function Home(){
+  const [records,setRecords]=useState<DailyRecord[]>([]);
+  const [initialStockMap,setInitialStockMap]=useState<Record<string,number>>({});
+  const [activeTab,setActiveTab]=useState("전체");
+  const [view,setView]=useState<"table"|"history"|"stock">("table");
+  const [sortKey,setSortKey]=useState<"actualOutbound"|"revenue"|"avg7"|"currentStock"|"">("actualOutbound");
+  const [uploading,setUploading]=useState(false);
+  const [loading,setLoading]=useState(true);
+  const [toast,setToast]=useState("");
+  const [stockModal,setStockModal]=useState(false);
+  const [stockInputs,setStockInputs]=useState<Record<string,string>>({});
+  const [savingStock,setSavingStock]=useState(false);
+  const sbRef=useRef<ReturnType<typeof getSupabase>|null>(null);
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    setTimeout(() => setToast(""), 3000);
-  };
+  useEffect(()=>{sbRef.current=getSupabase();loadAll();},[]);
 
-  // Supabase에서 전체 기록 로드
-  const loadRecords = useCallback(async () => {
+  const showToast=(msg:string)=>{setToast(msg);setTimeout(()=>setToast(""),3000);};
+
+  const loadAll=useCallback(async()=>{
     setLoading(true);
-    const { data, error } = await supabase
-      .from("daily_outbound")
-      .select("date, barcode, qty, revenue, orders")
-      .order("date", { ascending: true });
-    if (error) { console.error(error); setLoading(false); return; }
+    const sb=sbRef.current??getSupabase();
 
-    // date별로 그룹핑
-    const map: Record<string, DailyRecord["outbound"]> = {};
-    for (const row of data ?? []) {
-      if (!map[row.date]) map[row.date] = {};
-      map[row.date][row.barcode] = { qty: row.qty, revenue: row.revenue, orders: row.orders };
+    // 출고 기록 로드
+    const{data:outData}=await sb.from("daily_outbound").select("date,barcode,qty,revenue,orders").order("date",{ascending:true});
+    const map:Record<string,DailyRecord["outbound"]>={};
+    for(const row of outData??[]){
+      if(!map[row.date])map[row.date]={};
+      map[row.date][row.barcode]={qty:row.qty,revenue:row.revenue,orders:row.orders};
     }
-    const recs: DailyRecord[] = Object.entries(map)
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([date, outbound]) => ({ date, outbound }));
+    const recs:DailyRecord[]=Object.entries(map).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,outbound])=>({date,outbound}));
     setRecords(recs);
+
+    // 초기재고 로드
+    const{data:stockData}=await sb.from("initial_stock").select("barcode,qty");
+    const stockMap:Record<string,number>={};
+    for(const row of stockData??[])stockMap[row.barcode]=row.qty;
+    setInitialStockMap(stockMap);
+
     setLoading(false);
-  }, []);
+  },[]);
 
-  useEffect(() => { loadRecords(); }, [loadRecords]);
-
-  // 출고 파일 업로드 → Supabase upsert
-  const handleOutbound = useCallback(async (file: File) => {
+  const handleOutbound=useCallback(async(file:File)=>{
     setUploading(true);
-    const m = file.name.match(/(\d{8})/);
-    let date = new Date();
-    date.setDate(date.getDate() - 1);
-    if (m) {
-      const d = new Date(`${m[1].slice(0,4)}-${m[1].slice(4,6)}-${m[1].slice(6,8)}`);
-      d.setDate(d.getDate() - 1);
-      date = d;
-    }
-    const dateStr = date.toISOString().slice(0, 10);
-
-    const reader = new FileReader();
-    reader.onload = async e => {
-      const wb = XLSX.read(e.target?.result, { type:"array" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval:"" });
-
-      const agg: Record<string, { qty: number; revenue: number; orders: number }> = {};
-      for (const r of raw) {
-        const bc = r["SKU바코드"]
-          ? String(typeof r["SKU바코드"] === "number" ? Math.round(r["SKU바코드"] as number) : r["SKU바코드"]).trim()
-          : "";
-        if (!bc) continue;
-        if (!agg[bc]) agg[bc] = { qty:0, revenue:0, orders:0 };
-        agg[bc].qty     += Number(r["출고 수량"] ?? 0);
-        agg[bc].revenue += Number(r["주문단위 결제금액"] ?? 0);
-        agg[bc].orders  += 1;
+    const m=file.name.match(/(\d{8})/);
+    let date=new Date();date.setDate(date.getDate()-1);
+    if(m){const d=new Date(`${m[1].slice(0,4)}-${m[1].slice(4,6)}-${m[1].slice(6,8)}`);d.setDate(d.getDate()-1);date=d;}
+    const dateStr=date.toISOString().slice(0,10);
+    const reader=new FileReader();
+    reader.onload=async e=>{
+      const wb=XLSX.read(e.target?.result,{type:"array"});
+      const ws=wb.Sheets[wb.SheetNames[0]];
+      const raw=XLSX.utils.sheet_to_json<Record<string,unknown>>(ws,{defval:""});
+      const agg:Record<string,{qty:number;revenue:number;orders:number}>={};
+      const seenOrders=new Set<string>();
+      for(const r of raw){
+        const bc=r["SKU바코드"]?String(typeof r["SKU바코드"]==="number"?Math.round(r["SKU바코드"] as number):r["SKU바코드"]).trim():"";
+        if(!bc)continue;
+        const orderNo=String(r["주문번호"]??"");
+        if(bc==="8809822422173")continue;
+        if(!agg[bc])agg[bc]={qty:0,revenue:0,orders:0};
+        agg[bc].qty+=Number(r["출고 수량"]??0);
+        if(bc==="8809487308195"){
+          if(!seenOrders.has(orderNo)){seenOrders.add(orderNo);agg[bc].revenue+=Number(r["주문단위 결제금액"]??0);agg[bc].orders+=1;}
+        }else{agg[bc].revenue+=Number(r["주문단위 결제금액"]??0);agg[bc].orders+=1;}
       }
-
-      const upsertRows = Object.entries(agg).map(([barcode, v]) => ({
-        date: dateStr,
-        barcode,
-        qty: v.qty,
-        revenue: v.revenue,
-        orders: v.orders,
-      }));
-
-      const { error } = await supabase
-        .from("daily_outbound")
-        .upsert(upsertRows, { onConflict: "date,barcode" });
-
-      if (error) {
-        showToast("❌ 업로드 실패: " + error.message);
-      } else {
-        showToast(`✓ ${dateStr} 출고 데이터 저장 완료`);
-        await loadRecords();
-      }
+      const upsertRows=Object.entries(agg).map(([barcode,v])=>({date:dateStr,barcode,qty:v.qty,revenue:v.revenue,orders:v.orders}));
+      const sb=sbRef.current??getSupabase();
+      const{error}=await sb.from("daily_outbound").upsert(upsertRows,{onConflict:"date,barcode"});
+      if(error)showToast("❌ 실패: "+error.message);
+      else{showToast(`✓ ${dateStr} 저장 완료`);await loadAll();}
       setUploading(false);
     };
     reader.readAsArrayBuffer(file);
-  }, [loadRecords]);
+  },[loadAll]);
 
-  const rows = buildRows(records);
-  const latestDate = records[records.length - 1]?.date ?? "";
-  const categories = ["전체", ...Array.from(new Set(MASTER_DATA.map(r => r.category)))];
-  let displayed = activeTab === "전체" ? rows : rows.filter(r => r.category === activeTab);
-  if (sortKey) displayed = [...displayed].sort((a, b) => (b[sortKey as keyof SkuRow] as number) - (a[sortKey as keyof SkuRow] as number));
+  // 초기재고 모달 열기
+  const openStockModal=()=>{
+    const inputs:Record<string,string>={};
+    MASTER_DATA.forEach(m=>{inputs[m.barcode]=String(initialStockMap[m.barcode]??0);});
+    setStockInputs(inputs);
+    setStockModal(true);
+  };
 
-  const totalOut  = displayed.reduce((s, r) => s + r.actualOutbound, 0);
-  const totalRev  = displayed.reduce((s, r) => s + r.revenue, 0);
-  const totalOrd  = displayed.reduce((s, r) => s + r.orders, 0);
-  const totalAvg7 = displayed.reduce((s, r) => s + r.avg7, 0);
-  const hasData   = records.length > 0;
+  // 초기재고 저장
+  const saveInitialStock=async()=>{
+    setSavingStock(true);
+    const sb=sbRef.current??getSupabase();
+    const rows=Object.entries(stockInputs).map(([barcode,qty])=>({barcode,qty:parseInt(qty)||0,updated_at:new Date().toISOString()}));
+    const{error}=await sb.from("initial_stock").upsert(rows,{onConflict:"barcode"});
+    if(error)showToast("❌ 저장 실패: "+error.message);
+    else{
+      const newMap:Record<string,number>={};
+      rows.forEach(r=>newMap[r.barcode]=r.qty);
+      setInitialStockMap(newMap);
+      showToast("✓ 초기재고 저장 완료");
+      setStockModal(false);
+    }
+    setSavingStock(false);
+  };
 
-  return (
-    <div style={{ minHeight:"100vh", background:"#f5f4f0" }}>
+  const rows=buildRows(records,initialStockMap);
+  const latestDate=records[records.length-1]?.date??"";
+  const categories=["전체",...Array.from(new Set(MASTER_DATA.map(r=>r.category)))];
+  let displayed=activeTab==="전체"?rows:rows.filter(r=>r.category===activeTab);
+  if(sortKey)displayed=[...displayed].sort((a,b)=>(b[sortKey as keyof SkuRow] as number)-(a[sortKey as keyof SkuRow] as number));
+  const totalOut=displayed.reduce((s,r)=>s+r.actualOutbound,0);
+  const totalRev=displayed.reduce((s,r)=>s+r.revenue,0);
+  const totalOrd=displayed.reduce((s,r)=>s+r.orders,0);
+  const totalAvg7=displayed.reduce((s,r)=>s+r.avg7,0);
+  const totalCurrent=displayed.filter(r=>r.currentStock>=0).reduce((s,r)=>s+r.currentStock,0);
+  const hasData=records.length>0;
+  const hasStock=Object.keys(initialStockMap).length>0;
 
-      {/* 토스트 */}
-      {toast && (
-        <div style={{ position:"fixed", top:20, right:20, zIndex:999, background:"#1a1a1a", color:"#fff", padding:"10px 18px", borderRadius:10, fontSize:13 }}>
-          {toast}
+  return(
+    <div style={{minHeight:"100vh",background:"#f5f4f0"}}>
+      {toast&&<div style={{position:"fixed",top:20,right:20,zIndex:999,background:"#1a1a1a",color:"#fff",padding:"10px 18px",borderRadius:10,fontSize:13,boxShadow:"0 4px 20px rgba(0,0,0,0.15)"}}>{toast}</div>}
+
+      {/* 초기재고 모달 */}
+      {stockModal&&(
+        <div style={{position:"fixed",inset:0,zIndex:100,background:"rgba(0,0,0,0.4)",display:"flex",alignItems:"center",justifyContent:"center"}}
+          onClick={e=>{if(e.target===e.currentTarget)setStockModal(false);}}>
+          <div style={{background:"#fff",borderRadius:16,width:560,maxHeight:"80vh",display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            <div style={{padding:"1.25rem 1.5rem",borderBottom:"0.5px solid #f0ede8",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:500}}>초기재고 설정</div>
+                <div style={{fontSize:11,color:"#aaa",marginTop:2}}>SKU별 최초 입고 수량을 입력하세요. 언제든 수정 가능합니다.</div>
+              </div>
+              <button onClick={()=>setStockModal(false)} style={{border:"none",background:"none",fontSize:18,cursor:"pointer",color:"#aaa"}}>×</button>
+            </div>
+            <div style={{overflowY:"auto",flex:1}}>
+              {categories.filter(c=>c!=="전체").map(cat=>(
+                <div key={cat}>
+                  <div style={{padding:"8px 1.5rem",background:"#fdfcfa",fontSize:11,fontWeight:500,color:cs(cat).text,borderBottom:"0.5px solid #f0ede8",borderTop:"0.5px solid #f0ede8"}}>
+                    <span style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:cs(cat).dot,marginRight:6}}/>
+                    {cat}
+                  </div>
+                  {MASTER_DATA.filter(m=>m.category===cat).map(m=>(
+                    <div key={m.barcode} style={{display:"flex",alignItems:"center",padding:"10px 1.5rem",borderBottom:"0.5px solid #f8f7f4",gap:12}}>
+                      <div style={{flex:1,fontSize:13,fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.name}</div>
+                      <div style={{fontSize:11,color:"#bbb",fontFamily:"monospace",flexShrink:0}}>{m.barcode}</div>
+                      <input
+                        type="number" min="0"
+                        value={stockInputs[m.barcode]??"0"}
+                        onChange={e=>setStockInputs(prev=>({...prev,[m.barcode]:e.target.value}))}
+                        style={{width:80,padding:"5px 8px",border:"0.5px solid #d4d0c8",borderRadius:6,fontSize:13,textAlign:"right"}}
+                      />
+                      <span style={{fontSize:12,color:"#888",flexShrink:0}}>개</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+            <div style={{padding:"1rem 1.5rem",borderTop:"0.5px solid #f0ede8",display:"flex",justifyContent:"flex-end",gap:8}}>
+              <button onClick={()=>setStockModal(false)} style={{padding:"8px 16px",borderRadius:8,border:"0.5px solid #d4d0c8",background:"#fff",fontSize:13,cursor:"pointer",color:"#888"}}>취소</button>
+              <button onClick={saveInitialStock} disabled={savingStock} style={{padding:"8px 20px",borderRadius:8,border:"none",background:"#1a1a1a",color:"#fff",fontSize:13,fontWeight:500,cursor:"pointer"}}>
+                {savingStock?"저장 중...":"저장"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
       {/* 사이드바 */}
-      <div style={{ position:"fixed", top:0, left:0, width:200, height:"100vh", background:"#fff", borderRight:"0.5px solid #e5e4de", display:"flex", flexDirection:"column", padding:"1.25rem 0", zIndex:10 }}>
-        <div style={{ padding:"0 1.25rem 1rem", borderBottom:"0.5px solid #f0ede8" }}>
-          <div style={{ fontSize:14, fontWeight:700, color:"#1a1a1a" }}>OA Dashboard</div>
-          <div style={{ fontSize:11, color:"#aaa", marginTop:2 }}>전사 출고 현황</div>
+      <div style={{position:"fixed",top:0,left:0,width:200,height:"100vh",background:"#fff",borderRight:"0.5px solid #e5e4de",display:"flex",flexDirection:"column",padding:"1.25rem 0",zIndex:10}}>
+        <div style={{padding:"0 1.25rem 1rem",borderBottom:"0.5px solid #f0ede8"}}>
+          <div style={{fontSize:14,fontWeight:700,color:"#1a1a1a"}}>OA Dashboard</div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:2}}>전사 출고 현황</div>
         </div>
-        <div style={{ padding:"0.75rem 0.75rem 0", flex:1, overflowY:"auto" }}>
-          {categories.map(cat => {
-            const c = cs(cat);
-            const count = cat === "전체" ? MASTER_DATA.length : MASTER_DATA.filter(r => r.category === cat).length;
-            return (
-              <button key={cat} onClick={() => setActiveTab(cat)} style={{
-                width:"100%", textAlign:"left", padding:"7px 10px", borderRadius:8,
-                border:"none", cursor:"pointer", marginBottom:2,
-                background: activeTab === cat ? c.bg : "transparent",
-                color: activeTab === cat ? c.text : "#888",
-                fontWeight: activeTab === cat ? 500 : 400,
-                fontSize:13, display:"flex", alignItems:"center", justifyContent:"space-between",
-              }}>
-                <span style={{ display:"flex", alignItems:"center", gap:8 }}>
-                  {cat !== "전체" && <span style={{ width:7, height:7, borderRadius:"50%", background:c.dot, flexShrink:0 }} />}
+        <div style={{padding:"0.75rem 0.75rem 0",flex:1,overflowY:"auto"}}>
+          {categories.map(cat=>{
+            const c=cs(cat);
+            const count=cat==="전체"?MASTER_DATA.length:MASTER_DATA.filter(r=>r.category===cat).length;
+            return(
+              <button key={cat} onClick={()=>setActiveTab(cat)} style={{width:"100%",textAlign:"left",padding:"7px 10px",borderRadius:8,border:"none",cursor:"pointer",marginBottom:2,background:activeTab===cat?c.bg:"transparent",color:activeTab===cat?c.text:"#888",fontWeight:activeTab===cat?500:400,fontSize:13,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <span style={{display:"flex",alignItems:"center",gap:8}}>
+                  {cat!=="전체"&&<span style={{width:7,height:7,borderRadius:"50%",background:c.dot,flexShrink:0}}/>}
                   {cat}
                 </span>
-                <span style={{ fontSize:11, opacity:0.6 }}>{count}</span>
+                <span style={{fontSize:11,opacity:0.6}}>{count}</span>
               </button>
             );
           })}
         </div>
-        <div style={{ padding:"0.75rem", borderTop:"0.5px solid #f0ede8" }}>
-          <label style={{ display:"block", textAlign:"center", padding:"8px", borderRadius:8, background:"#1a1a1a", color:"#fff", fontSize:12, fontWeight:500, cursor:"pointer" }}>
-            {uploading ? "저장 중..." : "↑ 출고 파일 업로드"}
-            <input type="file" accept=".xlsx,.xls" style={{ display:"none" }}
-              onChange={e => { const f = e.target.files?.[0]; if (f) handleOutbound(f); e.target.value=""; }} />
+        <div style={{padding:"0.75rem",borderTop:"0.5px solid #f0ede8",display:"flex",flexDirection:"column",gap:6}}>
+          <label style={{display:"block",textAlign:"center",padding:"8px",borderRadius:8,background:"#1a1a1a",color:"#fff",fontSize:12,fontWeight:500,cursor:"pointer"}}>
+            {uploading?"저장 중...":"↑ 출고 파일 업로드"}
+            <input type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleOutbound(f);e.target.value="";}}/>
           </label>
-          <div style={{ fontSize:10, color:"#bbb", textAlign:"center", marginTop:6 }}>
-            {loading ? "로딩 중..." : hasData ? `${records.length}일 누적 · 최근 ${latestDate}` : "데이터 없음"}
+          <button onClick={openStockModal} style={{padding:"7px",borderRadius:8,border:"0.5px solid #d4d0c8",background:"#fff",fontSize:12,cursor:"pointer",color:"#555"}}>
+            📦 초기재고 설정
+          </button>
+          <div style={{fontSize:10,color:"#bbb",textAlign:"center"}}>
+            {loading?"로딩 중...":hasData?`${records.length}일 누적 · ${latestDate}`:"데이터 없음"}
           </div>
         </div>
       </div>
 
       {/* 메인 */}
-      <div style={{ marginLeft:200, padding:"1.5rem 2rem" }}>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-end", marginBottom:"1.5rem" }}>
+      <div style={{marginLeft:200,padding:"1.5rem 2rem"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:"1.5rem"}}>
           <div>
-            <h1 style={{ fontSize:18, fontWeight:500 }}>{activeTab === "전체" ? "전사 출고 현황" : `${activeTab} 출고 현황`}</h1>
-            <p style={{ fontSize:12, color:"#aaa", marginTop:3 }}>
-              {hasData ? `전일 기준 ${latestDate} · ${records.length}일 누적` : "출고 파일을 업로드해주세요"}
-            </p>
+            <h1 style={{fontSize:18,fontWeight:500}}>{activeTab==="전체"?"전사 출고 현황":`${activeTab} 출고 현황`}</h1>
+            <p style={{fontSize:12,color:"#aaa",marginTop:3}}>{hasData?`전일 기준 ${latestDate} · ${records.length}일 누적`:"출고 파일을 업로드해주세요"}</p>
           </div>
-          <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-            <div style={{ display:"flex", border:"0.5px solid #d4d0c8", borderRadius:8, overflow:"hidden" }}>
-              {(["table","history"] as const).map(v => (
-                <button key={v} onClick={() => setView(v)} style={{ padding:"6px 12px", fontSize:12, border:"none", cursor:"pointer", background: view===v ? "#1a1a1a" : "#fff", color: view===v ? "#fff" : "#888" }}>
-                  {v === "table" ? "SKU별" : "날짜별"}
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            <div style={{display:"flex",border:"0.5px solid #d4d0c8",borderRadius:8,overflow:"hidden"}}>
+              {(["table","stock","history"] as const).map(v=>(
+                <button key={v} onClick={()=>setView(v)} style={{padding:"6px 12px",fontSize:12,border:"none",cursor:"pointer",background:view===v?"#1a1a1a":"#fff",color:view===v?"#fff":"#888"}}>
+                  {v==="table"?"출고현황":v==="stock"?"재고현황":"날짜별"}
                 </button>
               ))}
             </div>
-            {hasData && view === "table" && (
-              <select value={sortKey} onChange={e => setSortKey(e.target.value as typeof sortKey)}
-                style={{ fontSize:12, padding:"6px 10px", borderRadius:8, border:"0.5px solid #d4d0c8", background:"#fff", color:"#555", cursor:"pointer" }}>
+            {hasData&&(
+              <select value={sortKey} onChange={e=>setSortKey(e.target.value as typeof sortKey)} style={{fontSize:12,padding:"6px 10px",borderRadius:8,border:"0.5px solid #d4d0c8",background:"#fff",color:"#555",cursor:"pointer"}}>
                 <option value="actualOutbound">전일 출고 순</option>
                 <option value="avg7">7일 평균 순</option>
                 <option value="revenue">매출 순</option>
+                <option value="currentStock">현재고 순</option>
                 <option value="">기본 순서</option>
               </select>
             )}
@@ -297,132 +328,174 @@ export default function Home() {
         </div>
 
         {/* 요약 카드 */}
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:10, marginBottom:"1.5rem" }}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:"1.5rem"}}>
           {[
-            { label:"SKU 수",                                        value:`${displayed.length}종` },
-            { label:`전일 출고 (${latestDate ? fmtDate(latestDate) : "-"})`, value: hasData ? `${fmt(totalOut)}개`                      : "-", dim:!hasData },
-            { label:"전일 매출",                                      value: hasData ? `${(totalRev/10000).toFixed(0)}만원`             : "-", dim:!hasData },
-            { label:"전일 주문건",                                    value: hasData ? `${fmt(totalOrd)}건`                             : "-", dim:!hasData },
-            { label:"7일 평균 출고",                                  value: hasData ? `${Math.round(totalAvg7)}개/일`                  : "-", dim:!hasData },
-          ].map(c => (
-            <div key={c.label} style={{ background:"#ebe9e2", borderRadius:8, padding:"13px 15px" }}>
-              <div style={{ fontSize:11, color:"#888", marginBottom:5 }}>{c.label}</div>
-              <div style={{ fontSize:19, fontWeight:500, color: c.dim ? "#ccc" : "#1a1a1a" }}>{c.value}</div>
+            {label:"SKU 수", value:`${displayed.length}종`},
+            {label:`전일 출고 (${latestDate?fmtDate(latestDate):"-"})`, value:hasData?`${fmt(totalOut)}개`:"-", dim:!hasData},
+            {label:"전일 매출", value:hasData?`${(totalRev/10000).toFixed(0)}만원`:"-", dim:!hasData},
+            {label:"7일 평균", value:hasData?`${Math.round(totalAvg7)}개/일`:"-", dim:!hasData},
+            {label:"현재고 합계", value:hasStock?`${fmt(totalCurrent)}개`:"-", dim:!hasStock},
+          ].map(c=>(
+            <div key={c.label} style={{background:"#ebe9e2",borderRadius:8,padding:"13px 15px"}}>
+              <div style={{fontSize:11,color:"#888",marginBottom:5}}>{c.label}</div>
+              <div style={{fontSize:19,fontWeight:500,color:c.dim?"#ccc":"#1a1a1a"}}>{c.value}</div>
             </div>
           ))}
         </div>
 
-        {/* SKU 테이블 */}
-        {view === "table" && (
-          <div style={{ background:"#fff", borderRadius:12, border:"0.5px solid #e5e4de", overflow:"hidden" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+        {/* 출고현황 탭 */}
+        {view==="table"&&(
+          <div style={{background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr>
                   <th style={TH}>카테고리</th>
                   <th style={TH}>제품명</th>
-                  <th style={{ ...TH, textAlign:"right" }}>계획출고</th>
-                  <th style={{ ...TH, textAlign:"right" }}>전일출고{latestDate && <span style={{ fontWeight:400, color:"#bbb", marginLeft:3 }}>({fmtDate(latestDate)})</span>}</th>
-                  <th style={{ ...TH, textAlign:"right" }}>7일 평균</th>
-                  <th style={{ ...TH, textAlign:"right" }}>전일 매출 <span style={{fontWeight:400,color:"#bbb"}}>(세트기준)</span></th>
-                  <th style={{ ...TH, textAlign:"right" }}>주문건</th>
+                  <th style={{...TH,textAlign:"right"}}>계획출고</th>
+                  <th style={{...TH,textAlign:"right"}}>전일출고{latestDate&&<span style={{fontWeight:400,color:"#bbb",marginLeft:3}}>({fmtDate(latestDate)})</span>}</th>
+                  <th style={{...TH,textAlign:"right"}}>7일 평균</th>
+                  <th style={{...TH,textAlign:"right"}}>전일 매출</th>
+                  <th style={{...TH,textAlign:"right"}}>주문건</th>
                 </tr>
               </thead>
               <tbody>
-                {displayed.map((row, i) => {
-                  const c = cs(row.category);
-                  const aboveAvg = row.actualOutbound > row.avg7 && row.avg7 > 0;
-                  return (
-                    <tr key={row.barcode+i} style={{ borderBottom:"0.5px solid #f8f7f4", background: i%2===0 ? "#fff" : "#fdfcfa" }}>
-                      <td style={TD}><span style={{ display:"inline-block", fontSize:11, padding:"2px 8px", borderRadius:20, background:c.bg, color:c.text, fontWeight:500, whiteSpace:"nowrap" }}>{row.category}</span></td>
-                      <td style={{ ...TD, fontWeight:500, maxWidth:220 }}><span style={{ display:"block", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.name}</span></td>
-                      <td style={{ ...TD, textAlign:"right", color:"#aaa" }}>{row.planOutbound > 0 ? fmt(row.planOutbound) : "-"}</td>
-                      <td style={{ ...TD, textAlign:"right" }}>
-                        {!hasData ? <span style={{ color:"#ddd" }}>-</span>
-                          : row.actualOutbound > 0
-                            ? <span style={{ color:"#A32D2D", fontWeight:600 }}>{fmt(row.actualOutbound)}{aboveAvg && <span style={{ fontSize:10, marginLeft:4, color:"#1D9E75" }}>↑</span>}</span>
-                            : <span style={{ color:"#ddd" }}>0</span>}
+                {displayed.map((row,i)=>{
+                  const c=cs(row.category);
+                  const aboveAvg=row.actualOutbound>row.avg7&&row.avg7>0;
+                  return(
+                    <tr key={row.barcode+i} style={{borderBottom:"0.5px solid #f8f7f4",background:i%2===0?"#fff":"#fdfcfa"}}>
+                      <td style={TD}><span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:20,background:c.bg,color:c.text,fontWeight:500,whiteSpace:"nowrap"}}>{row.category}</span></td>
+                      <td style={{...TD,fontWeight:500,maxWidth:220}}><span style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.name}</span></td>
+                      <td style={{...TD,textAlign:"right",color:"#aaa"}}>{row.planOutbound>0?fmt(row.planOutbound):"-"}</td>
+                      <td style={{...TD,textAlign:"right"}}>
+                        {!hasData?<span style={{color:"#ddd"}}>-</span>:row.actualOutbound>0?<span style={{color:"#A32D2D",fontWeight:600}}>{fmt(row.actualOutbound)}{aboveAvg&&<span style={{fontSize:10,marginLeft:4,color:"#1D9E75"}}>↑</span>}</span>:<span style={{color:"#ddd"}}>0</span>}
                       </td>
-                      <td style={{ ...TD, textAlign:"right" }}>{!hasData ? <span style={{ color:"#ddd" }}>-</span> : row.avg7 > 0 ? <span style={{ color:"#555" }}>{row.avg7}</span> : <span style={{ color:"#ddd" }}>-</span>}</td>
-                      <td style={{ ...TD, textAlign:"right" }}>{!hasData ? <span style={{ color:"#ddd" }}>-</span> : row.revenue > 0 ? <span style={{ color:"#0F6E56", fontWeight:500 }}>{fmt(row.revenue)}원</span> : <span style={{ color:"#ddd" }}>-</span>}</td>
-                      <td style={{ ...TD, textAlign:"right" }}>{!hasData ? <span style={{ color:"#ddd" }}>-</span> : row.orders > 0 ? fmt(row.orders) : <span style={{ color:"#ddd" }}>-</span>}</td>
+                      <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.avg7>0?<span style={{color:"#555"}}>{row.avg7}</span>:<span style={{color:"#ddd"}}>-</span>}</td>
+                      <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.revenue>0?<span style={{color:"#0F6E56",fontWeight:500}}>{fmt(row.revenue)}원</span>:<span style={{color:"#ddd"}}>-</span>}</td>
+                      <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.orders>0?fmt(row.orders):<span style={{color:"#ddd"}}>-</span>}</td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* 재고현황 탭 */}
+        {view==="stock"&&(
+          <div style={{background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",overflow:"hidden"}}>
+            {!hasStock&&(
+              <div style={{textAlign:"center",padding:"3rem",color:"#bbb"}}>
+                <div style={{fontSize:32,marginBottom:10}}>📦</div>
+                <div style={{fontSize:13,color:"#888",marginBottom:12}}>초기재고가 설정되지 않았어요</div>
+                <button onClick={openStockModal} style={{padding:"8px 20px",borderRadius:8,border:"none",background:"#1a1a1a",color:"#fff",fontSize:13,cursor:"pointer"}}>
+                  초기재고 입력하기
+                </button>
+              </div>
+            )}
+            {hasStock&&(
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr>
+                    <th style={TH}>카테고리</th>
+                    <th style={TH}>제품명</th>
+                    <th style={{...TH,textAlign:"right"}}>초기재고</th>
+                    <th style={{...TH,textAlign:"right"}}>누적출고</th>
+                    <th style={{...TH,textAlign:"right"}}>현재고</th>
+                    <th style={{...TH,textAlign:"right"}}>소진율</th>
+                    <th style={TH}>재고바</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayed.map((row,i)=>{
+                    const c=cs(row.category);
+                    const totalOut=records.reduce((s,r)=>s+(r.outbound[row.barcode]?.qty??0),0);
+                    const pct=row.initialStock>0?Math.min(100,Math.round((totalOut/row.initialStock)*100)):0;
+                    const barColor=pct>=80?"#E24B4A":pct>=50?"#EF9F27":"#1D9E75";
+                    const stockColor=row.currentStock<0?"#bbb":row.currentStock<50?"#A32D2D":row.currentStock<100?"#BA7517":"#0F6E56";
+                    return(
+                      <tr key={row.barcode+i} style={{borderBottom:"0.5px solid #f8f7f4",background:i%2===0?"#fff":"#fdfcfa"}}>
+                        <td style={TD}><span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:20,background:c.bg,color:c.text,fontWeight:500,whiteSpace:"nowrap"}}>{row.category}</span></td>
+                        <td style={{...TD,fontWeight:500,maxWidth:220}}><span style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.name}</span></td>
+                        <td style={{...TD,textAlign:"right",color:"#888"}}>{row.initialStock>0?fmt(row.initialStock):<span style={{color:"#ddd"}}>-</span>}</td>
+                        <td style={{...TD,textAlign:"right",color:"#A32D2D"}}>{totalOut>0?`-${fmt(totalOut)}`:<span style={{color:"#ddd"}}>0</span>}</td>
+                        <td style={{...TD,textAlign:"right",fontWeight:600,color:stockColor}}>{row.currentStock>=0?fmt(row.currentStock):<span style={{color:"#ddd"}}>-</span>}</td>
+                        <td style={{...TD,textAlign:"right",fontSize:12,color:"#888"}}>{row.initialStock>0?`${pct}%`:<span style={{color:"#ddd"}}>-</span>}</td>
+                        <td style={{...TD,minWidth:120}}>
+                          {row.initialStock>0?(
+                            <div style={{display:"flex",alignItems:"center",gap:6}}>
+                              <div style={{flex:1,height:6,background:"#f1efe8",borderRadius:4}}>
+                                <div style={{height:6,borderRadius:4,width:`${100-pct}%`,background:barColor,transition:"width .3s"}}/>
+                              </div>
+                            </div>
+                          ):<span style={{color:"#ddd",fontSize:11}}>-</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
           </div>
         )}
 
         {/* 날짜별 히스토리 */}
-        {view === "history" && (
-          <div style={{ background:"#fff", borderRadius:12, border:"0.5px solid #e5e4de", overflow:"hidden" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+        {view==="history"&&(
+          <div style={{background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",overflow:"hidden"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
               <thead>
                 <tr>
                   <th style={TH}>날짜</th>
-                  <th style={{ ...TH, textAlign:"right" }}>총 출고</th>
-                  <th style={{ ...TH, textAlign:"right" }}>총 매출</th>
-                  <th style={{ ...TH, textAlign:"right" }}>주문건</th>
-                  <th style={{ ...TH, textAlign:"right" }}>출고 SKU</th>
+                  <th style={{...TH,textAlign:"right"}}>총 출고</th>
+                  <th style={{...TH,textAlign:"right"}}>총 매출</th>
+                  <th style={{...TH,textAlign:"right"}}>주문건</th>
+                  <th style={{...TH,textAlign:"right"}}>출고 SKU</th>
                   <th style={TH}>카테고리별</th>
                 </tr>
               </thead>
               <tbody>
-                {[...records].reverse().map((rec, i) => {
-                  const dayOut = Object.values(rec.outbound).reduce((s, v) => s + v.qty, 0);
-                  const dayRev = Object.values(rec.outbound).reduce((s, v) => s + v.revenue, 0);
-                  const dayOrd = Object.values(rec.outbound).reduce((s, v) => s + v.orders, 0);
-                  const activeSkus = Object.values(rec.outbound).filter(v => v.qty > 0).length;
-                  const catOut: Record<string, number> = {};
-                  MASTER_DATA.forEach(m => {
-                    const qty = rec.outbound[m.barcode]?.qty ?? 0;
-                    if (qty > 0) catOut[m.category] = (catOut[m.category] ?? 0) + qty;
-                  });
-                  return (
-                    <tr key={rec.date} style={{ borderBottom:"0.5px solid #f8f7f4", background: i%2===0 ? "#fff" : "#fdfcfa" }}>
-                      <td style={{ ...TD, fontWeight:500 }}>
-                        {rec.date}
-                        {i === 0 && <span style={{ marginLeft:6, fontSize:10, background:"#E6F1FB", color:"#185FA5", padding:"1px 6px", borderRadius:10 }}>최신</span>}
-                      </td>
-                      <td style={{ ...TD, textAlign:"right", fontWeight:600, color:"#A32D2D" }}>{fmt(dayOut)}개</td>
-                      <td style={{ ...TD, textAlign:"right", color:"#0F6E56", fontWeight:500 }}>{(dayRev/10000).toFixed(0)}만원</td>
-                      <td style={{ ...TD, textAlign:"right" }}>{fmt(dayOrd)}건</td>
-                      <td style={{ ...TD, textAlign:"right" }}>{activeSkus}종</td>
-                      <td style={TD}>
-                        <div style={{ display:"flex", gap:4, flexWrap:"wrap" }}>
-                          {Object.entries(catOut).map(([cat, qty]) => {
-                            const c = cs(cat);
-                            return <span key={cat} style={{ fontSize:10, padding:"1px 7px", borderRadius:20, background:c.bg, color:c.text }}>{cat} {qty}</span>;
-                          })}
-                        </div>
-                      </td>
+                {[...records].reverse().map((rec,i)=>{
+                  const dayOut=Object.values(rec.outbound).reduce((s,v)=>s+v.qty,0);
+                  const dayRev=Object.values(rec.outbound).reduce((s,v)=>s+v.revenue,0);
+                  const dayOrd=Object.values(rec.outbound).reduce((s,v)=>s+v.orders,0);
+                  const activeSkus=Object.values(rec.outbound).filter(v=>v.qty>0).length;
+                  const catOut:Record<string,number>={};
+                  MASTER_DATA.forEach(m=>{const qty=rec.outbound[m.barcode]?.qty??0;if(qty>0)catOut[m.category]=(catOut[m.category]??0)+qty;});
+                  return(
+                    <tr key={rec.date} style={{borderBottom:"0.5px solid #f8f7f4",background:i%2===0?"#fff":"#fdfcfa"}}>
+                      <td style={{...TD,fontWeight:500}}>{rec.date}{i===0&&<span style={{marginLeft:6,fontSize:10,background:"#E6F1FB",color:"#185FA5",padding:"1px 6px",borderRadius:10}}>최신</span>}</td>
+                      <td style={{...TD,textAlign:"right",fontWeight:600,color:"#A32D2D"}}>{fmt(dayOut)}개</td>
+                      <td style={{...TD,textAlign:"right",color:"#0F6E56",fontWeight:500}}>{(dayRev/10000).toFixed(0)}만원</td>
+                      <td style={{...TD,textAlign:"right"}}>{fmt(dayOrd)}건</td>
+                      <td style={{...TD,textAlign:"right"}}>{activeSkus}종</td>
+                      <td style={TD}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{Object.entries(catOut).map(([cat,qty])=>{const c=cs(cat);return<span key={cat} style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:c.bg,color:c.text}}>{cat} {qty}</span>;})}</div></td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
-            {records.length === 0 && <div style={{ textAlign:"center", padding:"3rem", color:"#bbb", fontSize:13 }}>업로드된 기록이 없어요</div>}
+            {records.length===0&&<div style={{textAlign:"center",padding:"3rem",color:"#bbb",fontSize:13}}>업로드된 기록이 없어요</div>}
           </div>
         )}
 
         {/* 카테고리별 바 */}
-        {hasData && view === "table" && activeTab === "전체" && (
-          <div style={{ marginTop:"1.5rem", background:"#fff", borderRadius:12, border:"0.5px solid #e5e4de", padding:"1.25rem" }}>
-            <p style={{ fontSize:11, fontWeight:500, color:"#aaa", letterSpacing:"0.05em", marginBottom:14 }}>카테고리별 전일 출고 비중</p>
-            <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
-              {Array.from(new Set(MASTER_DATA.map(r => r.category))).map(cat => {
-                const catOut = rows.filter(r => r.category === cat).reduce((s, r) => s + r.actualOutbound, 0);
-                const allOut = rows.reduce((s, r) => s + r.actualOutbound, 0);
-                const pct = allOut > 0 ? (catOut / allOut) * 100 : 0;
-                const c = cs(cat);
-                return (
-                  <div key={cat} style={{ display:"flex", alignItems:"center", gap:12 }}>
-                    <div style={{ width:60, fontSize:12, color:"#888", textAlign:"right" }}>{cat}</div>
-                    <div style={{ flex:1, height:8, background:"#f1efe8", borderRadius:4 }}>
-                      <div style={{ height:8, borderRadius:4, width:`${pct}%`, background:c.dot }} />
+        {hasData&&view==="table"&&activeTab==="전체"&&(
+          <div style={{marginTop:"1.5rem",background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",padding:"1.25rem"}}>
+            <p style={{fontSize:11,fontWeight:500,color:"#aaa",letterSpacing:"0.05em",marginBottom:14}}>카테고리별 전일 출고 비중</p>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {Array.from(new Set(MASTER_DATA.map(r=>r.category))).map(cat=>{
+                const catOut=rows.filter(r=>r.category===cat).reduce((s,r)=>s+r.actualOutbound,0);
+                const allOut=rows.reduce((s,r)=>s+r.actualOutbound,0);
+                const pct=allOut>0?(catOut/allOut)*100:0;
+                const c=cs(cat);
+                return(
+                  <div key={cat} style={{display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{width:60,fontSize:12,color:"#888",textAlign:"right"}}>{cat}</div>
+                    <div style={{flex:1,height:8,background:"#f1efe8",borderRadius:4}}>
+                      <div style={{height:8,borderRadius:4,width:`${pct}%`,background:c.dot}}/>
                     </div>
-                    <div style={{ fontSize:12, color:"#555", width:50 }}>{fmt(catOut)}개</div>
-                    <div style={{ fontSize:11, color:"#bbb", width:40 }}>{pct.toFixed(1)}%</div>
+                    <div style={{fontSize:12,color:"#555",width:50}}>{fmt(catOut)}개</div>
+                    <div style={{fontSize:11,color:"#bbb",width:40}}>{pct.toFixed(1)}%</div>
                   </div>
                 );
               })}
@@ -430,11 +503,11 @@ export default function Home() {
           </div>
         )}
 
-        {!hasData && !loading && (
-          <div style={{ textAlign:"center", padding:"5rem 0", color:"#bbb" }}>
-            <div style={{ fontSize:40, marginBottom:12 }}>📦</div>
-            <div style={{ fontSize:14, color:"#888" }}>왼쪽 버튼으로 아르고 출고 파일을 업로드해주세요</div>
-            <div style={{ fontSize:12, marginTop:6 }}>매일 업로드하면 날짜별 누적 · 7일 평균이 자동 계산돼요</div>
+        {!hasData&&!loading&&(
+          <div style={{textAlign:"center",padding:"5rem 0",color:"#bbb"}}>
+            <div style={{fontSize:40,marginBottom:12}}>📦</div>
+            <div style={{fontSize:14,color:"#888"}}>왼쪽 버튼으로 아르고 출고 파일을 업로드해주세요</div>
+            <div style={{fontSize:12,marginTop:6}}>매일 업로드하면 날짜별 누적 · 7일 평균이 자동 계산돼요</div>
           </div>
         )}
       </div>
