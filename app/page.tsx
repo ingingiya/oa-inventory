@@ -324,7 +324,7 @@ export default function Home() {
                   <th style={{ ...TH, textAlign:"right" }}>계획출고</th>
                   <th style={{ ...TH, textAlign:"right" }}>전일출고{latestDate && <span style={{ fontWeight:400, color:"#bbb", marginLeft:3 }}>({fmtDate(latestDate)})</span>}</th>
                   <th style={{ ...TH, textAlign:"right" }}>7일 평균</th>
-                  <th style={{ ...TH, textAlign:"right" }}>전일 매출</th>
+                  <th style={{ ...TH, textAlign:"right" }}>전일 매출 <span style={{fontWeight:400,color:"#bbb"}}>(세트기준)</span></th>
                   <th style={{ ...TH, textAlign:"right" }}>주문건</th>
                 </tr>
               </thead>
