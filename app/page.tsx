@@ -73,8 +73,8 @@ const MASTER_DATA: Omit<SkuRow,"actualOutbound"|"revenue"|"orders"|"avg7"|"curre
   { category:"인테리어", name:"오아무선모던LED시계R-베이지", barcode:"8809822426799", dailySales:10, plan15:150, planOutbound:150 },
 ];
 
-// 재고탭에서만 거치대를 별도 행으로 추가
-const RACK_ROW = { category:"욕실", name:"오아클린이워터BD 전용거치대", barcode:"8809822422173", dailySales:40, plan15:600, planOutbound:515 };
+const RACK_BARCODE = "8809822422173";
+const RACK_ROW = { category:"욕실", name:"오아클린이워터BD 전용거치대", barcode:RACK_BARCODE, dailySales:40, plan15:600, planOutbound:515 };
 
 const CAT_COLOR: Record<string,{bg:string;text:string;dot:string}> = {
   이미용:{bg:"#E6F1FB",text:"#185FA5",dot:"#378ADD"},
@@ -86,8 +86,13 @@ const CAT_COLOR: Record<string,{bg:string;text:string;dot:string}> = {
 };
 const D={bg:"#F1EFE8",text:"#5F5E5A",dot:"#888780"};
 const cs=(cat:string)=>CAT_COLOR[cat]??D;
-const fmt=(n:number)=>n.toLocaleString("ko-KR");
+const fmt=(n:number)=>Math.round(n).toLocaleString("ko-KR");
 const fmtDate=(d:string)=>d.slice(5).replace("-","/");
+
+function normalizeBarcode(val: unknown): string {
+  if(val===null||val===undefined)return "";
+  return String(val).replace(/\s/g,"").trim();
+}
 
 function buildRows(records:DailyRecord[], currentStockMap:Record<string,number>):SkuRow[]{
   const recent7=records.slice(-7);
@@ -124,26 +129,28 @@ export default function Home(){
   const loadAll=useCallback(async()=>{
     setLoading(true);
     const sb=sbRef.current??getSupabase();
-    const{data:outData}=await sb.from("daily_outbound").select("date,barcode,qty,revenue,orders").order("date",{ascending:true});
-    const map:Record<string,DailyRecord["outbound"]>={};
-    for(const row of outData??[]){
-      if(!map[row.date])map[row.date]={};
-      map[row.date][row.barcode]={qty:row.qty,revenue:row.revenue,orders:row.orders};
-    }
-    const recs:DailyRecord[]=Object.entries(map).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,outbound])=>({date,outbound}));
-    setRecords(recs);
-
-    const{data:stockData}=await sb.from("current_stock").select("barcode,qty,snapshot_date").order("updated_at",{ascending:false});
-    const stockMap:Record<string,number>={};
-    let latestDate="";
-    for(const row of stockData??[]){
-      if(!(row.barcode in stockMap)){
-        stockMap[row.barcode]=row.qty;
-        if(row.snapshot_date>latestDate)latestDate=row.snapshot_date;
+    const{data:outData,error:outErr}=await sb.from("daily_outbound").select("date,barcode,qty,revenue,orders").order("date",{ascending:true});
+    if(!outErr){
+      const map:Record<string,DailyRecord["outbound"]>={};
+      for(const row of outData??[]){
+        if(!map[row.date])map[row.date]={};
+        map[row.date][row.barcode]={qty:row.qty,revenue:row.revenue,orders:row.orders};
       }
+      setRecords(Object.entries(map).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,outbound])=>({date,outbound})));
     }
-    setCurrentStockMap(stockMap);
-    setStockDate(latestDate);
+    const{data:stockData,error:stockErr}=await sb.from("current_stock").select("barcode,qty,snapshot_date").order("updated_at",{ascending:false});
+    if(!stockErr){
+      const stockMap:Record<string,number>={};
+      let latestDate="";
+      for(const row of stockData??[]){
+        if(!(row.barcode in stockMap)){
+          stockMap[row.barcode]=row.qty;
+          if(row.snapshot_date>latestDate)latestDate=row.snapshot_date;
+        }
+      }
+      setCurrentStockMap(stockMap);
+      setStockDate(latestDate);
+    }
     setLoading(false);
   },[]);
 
@@ -155,35 +162,33 @@ export default function Home(){
     const dateStr=date.toISOString().slice(0,10);
     const reader=new FileReader();
     reader.onload=async e=>{
-      const wb=XLSX.read(e.target?.result,{type:"array"});
-      const ws=wb.Sheets[wb.SheetNames[0]];
-      const raw=XLSX.utils.sheet_to_json<Record<string,unknown>>(ws,{defval:""});
-      const agg:Record<string,{qty:number;revenue:number;orders:number}>={};
-      const rackOrders=new Set<string>();
-      for(const r of raw){
-        const bc=r["SKU바코드"]?String(typeof r["SKU바코드"]==="number"?Math.round(r["SKU바코드"] as number):r["SKU바코드"]).trim():"";
-        if(bc==="8809822422173")rackOrders.add(String(r["주문번호"]??""));
-      }
-      const seenRackOrders=new Set<string>();
-      for(const r of raw){
-        const bc=r["SKU바코드"]?String(typeof r["SKU바코드"]==="number"?Math.round(r["SKU바코드"] as number):r["SKU바코드"]).trim():"";
-        if(!bc||bc==="8809822422173")continue;
-        const orderNo=String(r["주문번호"]??"");
-        const qty=Number(r["출고 수량"]??0);
-        const pay=Number(r["주문단위 결제금액"]??0);
-        if(!agg[bc])agg[bc]={qty:0,revenue:0,orders:0};
-        agg[bc].qty+=qty;
-        if(bc==="8809487308195"&&rackOrders.has(orderNo)){
-          if(!seenRackOrders.has(orderNo)){seenRackOrders.add(orderNo);agg[bc].revenue+=pay;agg[bc].orders+=1;}
-        }else{
-          agg[bc].revenue+=pay;agg[bc].orders+=1;
+      try{
+        const wb=XLSX.read(new Uint8Array(e.target?.result as ArrayBuffer),{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        const raw=XLSX.utils.sheet_to_json<Record<string,unknown>>(ws,{defval:""});
+        const agg:Record<string,{qty:number;revenue:number;orders:number}>={};
+        const rackOrders=new Set<string>();
+        for(const r of raw){
+          if(normalizeBarcode(r["SKU바코드"])===RACK_BARCODE)rackOrders.add(String(r["주문번호"]??""));
         }
-      }
-      const upsertRows=Object.entries(agg).map(([barcode,v])=>({date:dateStr,barcode,qty:v.qty,revenue:v.revenue,orders:v.orders}));
-      const sb=sbRef.current??getSupabase();
-      const{error}=await sb.from("daily_outbound").upsert(upsertRows,{onConflict:"date,barcode"});
-      if(error)showToast("❌ 실패: "+error.message);
-      else{showToast(`✓ ${dateStr} 출고 저장 완료`);await loadAll();}
+        const seenRack=new Set<string>();
+        for(const r of raw){
+          const bc=normalizeBarcode(r["SKU바코드"]);
+          if(!bc||bc===RACK_BARCODE)continue;
+          const orderNo=String(r["주문번호"]??"");
+          const qty=Number(r["출고 수량"]??0)||0;
+          const pay=Number(r["주문단위 결제금액"]??0)||0;
+          if(!agg[bc])agg[bc]={qty:0,revenue:0,orders:0};
+          agg[bc].qty+=qty;
+          if(bc==="8809487308195"&&rackOrders.has(orderNo)){
+            if(!seenRack.has(orderNo)){seenRack.add(orderNo);agg[bc].revenue+=pay;agg[bc].orders+=1;}
+          }else{agg[bc].revenue+=pay;agg[bc].orders+=1;}
+        }
+        const rows=Object.entries(agg).map(([barcode,v])=>({date:dateStr,barcode,qty:v.qty,revenue:v.revenue,orders:v.orders}));
+        const{error}=await (sbRef.current??getSupabase()).from("daily_outbound").upsert(rows,{onConflict:"date,barcode"});
+        if(error)showToast("❌ 출고 저장 실패: "+error.message);
+        else{showToast(`✓ ${dateStr} 출고 저장 완료`);await loadAll();}
+      }catch(err){showToast("❌ 파싱 오류: "+String(err));}
       setUploading(false);
     };
     reader.readAsArrayBuffer(file);
@@ -195,22 +200,28 @@ export default function Home(){
     const snapDate=m?`${m[1].slice(0,4)}-${m[1].slice(4,6)}-${m[1].slice(6,8)}`:new Date().toISOString().slice(0,10);
     const reader=new FileReader();
     reader.onload=async e=>{
-      const wb=XLSX.read(e.target?.result,{type:"array"});
-      const ws=wb.Sheets[wb.SheetNames[0]];
-      // 네이버 재고파일: 1~2행 설명, 3행 헤더, 4행부터 데이터
-      const raw=XLSX.utils.sheet_to_json<Record<string,unknown>>(ws,{defval:"",range:2});
-      const upsertRows:Array<{barcode:string;qty:number;snapshot_date:string;updated_at:string}>=[];
-      for(const r of raw){
-        const bc=r["바코드"]?String(r["바코드"]).trim():"";
-        const qtyRaw=r["판매가능 재고수량"];
-        const qty=qtyRaw===undefined||qtyRaw===""?0:Number(qtyRaw);
-        if(!bc||bc==="바코드")continue;
-        upsertRows.push({barcode:bc,qty:isNaN(qty)?0:qty,snapshot_date:snapDate,updated_at:new Date().toISOString()});
-      }
-      const sb=sbRef.current??getSupabase();
-      const{error}=await sb.from("current_stock").upsert(upsertRows,{onConflict:"barcode"});
-      if(error)showToast("❌ 재고 저장 실패: "+error.message);
-      else{showToast(`✓ ${snapDate} 재고 ${upsertRows.length}개 SKU 저장 완료`);await loadAll();}
+      try{
+        const wb=XLSX.read(new Uint8Array(e.target?.result as ArrayBuffer),{type:"array"});
+        const ws=wb.Sheets[wb.SheetNames[0]];
+        // 네이버 재고파일: 1행=기준일시, 2행=안내, 3행=헤더, 4행~=데이터
+        // B열(1)=바코드, G열(6)=판매가능재고수량 — 셀 직접 파싱
+        const wsRange=XLSX.utils.decode_range(ws["!ref"]??"A1:G200");
+        const now=new Date().toISOString();
+        const upsertRows:Array<{barcode:string;qty:number;snapshot_date:string;updated_at:string}>=[];
+        for(let ri=wsRange.s.r+3;ri<=wsRange.e.r;ri++){
+          const bcCell=ws[XLSX.utils.encode_cell({r:ri,c:1})];
+          const qtyCell=ws[XLSX.utils.encode_cell({r:ri,c:6})];
+          if(!bcCell)continue;
+          const bc=normalizeBarcode(bcCell.v);
+          if(!bc||bc.length<5||isNaN(Number(bc)))continue;
+          const qty=qtyCell?Math.max(0,parseInt(String(qtyCell.v))||0):0;
+          upsertRows.push({barcode:bc,qty,snapshot_date:snapDate,updated_at:now});
+        }
+        if(upsertRows.length===0){showToast("❌ 파싱된 데이터 없음");setUploadingStock(false);return;}
+        const{error}=await (sbRef.current??getSupabase()).from("current_stock").upsert(upsertRows,{onConflict:"barcode"});
+        if(error)showToast("❌ 재고 저장 실패: "+error.message);
+        else{showToast(`✓ ${snapDate} 재고 ${upsertRows.length}개 저장 완료`);await loadAll();}
+      }catch(err){showToast("❌ 파싱 오류: "+String(err));}
       setUploadingStock(false);
     };
     reader.readAsArrayBuffer(file);
@@ -221,7 +232,6 @@ export default function Home(){
   const categories=["전체",...Array.from(new Set(MASTER_DATA.map(r=>r.category)))];
   let displayed=activeTab==="전체"?rows:rows.filter(r=>r.category===activeTab);
   if(sortKey)displayed=[...displayed].sort((a,b)=>(b[sortKey as keyof SkuRow] as number)-(a[sortKey as keyof SkuRow] as number));
-
   const totalOut=displayed.reduce((s,r)=>s+r.actualOutbound,0);
   const totalRev=displayed.reduce((s,r)=>s+r.revenue,0);
   const totalOrd=displayed.reduce((s,r)=>s+r.orders,0);
@@ -229,23 +239,19 @@ export default function Home(){
   const hasStock=Object.keys(currentStockMap).length>0;
   const hasData=records.length>0;
 
-  // 재고탭용: 거치대 행 삽입
-  const stockDisplayed=displayed.flatMap(row=>{
+  type StockRow=SkuRow&{_isRack?:boolean;_argoTotal?:number};
+  const stockDisplayed:StockRow[]=displayed.flatMap(row=>{
     if(row.barcode==="8809487308195"){
-      const rackStock=currentStockMap["8809822422173"]??-1;
       const rackArgoTotal=records.reduce((s,r)=>s+(r.outbound["8809487308195"]?.qty??0),0);
-      return [
-        row,
-        {...RACK_ROW, actualOutbound:0, revenue:0, orders:0, avg7:0, currentStock:rackStock, _argoTotal:rackArgoTotal} as SkuRow & {_argoTotal?:number},
-      ];
+      return [row as StockRow,{...RACK_ROW,actualOutbound:0,revenue:0,orders:0,avg7:0,
+        currentStock:currentStockMap[RACK_BARCODE]??-1,_isRack:true,_argoTotal:rackArgoTotal} as StockRow];
     }
-    return [row];
+    return [row as StockRow];
   });
 
   return(
     <div style={{minHeight:"100vh",background:"#f5f4f0"}}>
       {toast&&<div style={{position:"fixed",top:20,right:20,zIndex:999,background:"#1a1a1a",color:"#fff",padding:"10px 18px",borderRadius:10,fontSize:13,boxShadow:"0 4px 20px rgba(0,0,0,0.15)"}}>{toast}</div>}
-
       <div style={{position:"fixed",top:0,left:0,width:200,height:"100vh",background:"#fff",borderRight:"0.5px solid #e5e4de",display:"flex",flexDirection:"column",padding:"1.25rem 0",zIndex:10}}>
         <div style={{padding:"0 1.25rem 1rem",borderBottom:"0.5px solid #f0ede8"}}>
           <div style={{fontSize:14,fontWeight:700,color:"#1a1a1a"}}>OA Dashboard</div>
@@ -255,15 +261,10 @@ export default function Home(){
           {categories.map(cat=>{
             const c=cs(cat);
             const count=cat==="전체"?MASTER_DATA.length:MASTER_DATA.filter(r=>r.category===cat).length;
-            return(
-              <button key={cat} onClick={()=>setActiveTab(cat)} style={{width:"100%",textAlign:"left",padding:"7px 10px",borderRadius:8,border:"none",cursor:"pointer",marginBottom:2,background:activeTab===cat?c.bg:"transparent",color:activeTab===cat?c.text:"#888",fontWeight:activeTab===cat?500:400,fontSize:13,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                <span style={{display:"flex",alignItems:"center",gap:8}}>
-                  {cat!=="전체"&&<span style={{width:7,height:7,borderRadius:"50%",background:c.dot,flexShrink:0}}/>}
-                  {cat}
-                </span>
-                <span style={{fontSize:11,opacity:0.6}}>{count}</span>
-              </button>
-            );
+            return(<button key={cat} onClick={()=>setActiveTab(cat)} style={{width:"100%",textAlign:"left",padding:"7px 10px",borderRadius:8,border:"none",cursor:"pointer",marginBottom:2,background:activeTab===cat?c.bg:"transparent",color:activeTab===cat?c.text:"#888",fontWeight:activeTab===cat?500:400,fontSize:13,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <span style={{display:"flex",alignItems:"center",gap:8}}>{cat!=="전체"&&<span style={{width:7,height:7,borderRadius:"50%",background:c.dot,flexShrink:0}}/>}{cat}</span>
+              <span style={{fontSize:11,opacity:0.6}}>{count}</span>
+            </button>);
           })}
         </div>
         <div style={{padding:"0.75rem",borderTop:"0.5px solid #f0ede8",display:"flex",flexDirection:"column",gap:6}}>
@@ -275,27 +276,19 @@ export default function Home(){
             {uploadingStock?"저장 중...":"📦 재고 파일 업로드"}
             <input type="file" accept=".xlsx,.xls" style={{display:"none"}} onChange={e=>{const f=e.target.files?.[0];if(f)handleStock(f);e.target.value="";}}/>
           </label>
-          <div style={{fontSize:10,color:"#bbb",textAlign:"center"}}>
-            {loading?"로딩 중...":[hasData?`출고 ${records.length}일`:"출고없음", hasStock?`재고 ${stockDate}`:"재고없음"].join(" · ")}
-          </div>
+          <div style={{fontSize:10,color:"#bbb",textAlign:"center"}}>{loading?"로딩 중...":[hasData?`출고 ${records.length}일`:"출고없음",hasStock?`재고 ${stockDate}`:"재고없음"].join(" · ")}</div>
         </div>
       </div>
-
       <div style={{marginLeft:200,padding:"1.5rem 2rem"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-end",marginBottom:"1.5rem"}}>
           <div>
             <h1 style={{fontSize:18,fontWeight:500}}>{activeTab==="전체"?"전사 출고·재고 현황":`${activeTab} 현황`}</h1>
-            <p style={{fontSize:12,color:"#aaa",marginTop:3}}>
-              {hasData?`출고 기준 ${latestDate}`:"출고 파일 없음"}
-              {hasStock&&` · 재고 기준 ${stockDate}`}
-            </p>
+            <p style={{fontSize:12,color:"#aaa",marginTop:3}}>{hasData?`출고 기준 ${latestDate}`:"출고 파일 없음"}{hasStock&&` · 재고 기준 ${stockDate}`}</p>
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center"}}>
             <div style={{display:"flex",border:"0.5px solid #d4d0c8",borderRadius:8,overflow:"hidden"}}>
               {(["table","stock","history"] as const).map(v=>(
-                <button key={v} onClick={()=>setView(v)} style={{padding:"6px 12px",fontSize:12,border:"none",cursor:"pointer",background:view===v?"#1a1a1a":"#fff",color:view===v?"#fff":"#888"}}>
-                  {v==="table"?"출고현황":v==="stock"?"재고현황":"날짜별"}
-                </button>
+                <button key={v} onClick={()=>setView(v)} style={{padding:"6px 12px",fontSize:12,border:"none",cursor:"pointer",background:view===v?"#1a1a1a":"#fff",color:view===v?"#fff":"#888"}}>{v==="table"?"출고현황":v==="stock"?"재고현황":"날짜별"}</button>
               ))}
             </div>
             <select value={sortKey} onChange={e=>setSortKey(e.target.value as typeof sortKey)} style={{fontSize:12,padding:"6px 10px",borderRadius:8,border:"0.5px solid #d4d0c8",background:"#fff",color:"#555",cursor:"pointer"}}>
@@ -307,14 +300,13 @@ export default function Home(){
             </select>
           </div>
         </div>
-
         <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:"1.5rem"}}>
           {[
-            {label:"SKU 수", value:`${displayed.length}종`},
-            {label:`전일 출고 (${latestDate?fmtDate(latestDate):"-"})`, value:hasData?`${fmt(totalOut)}개`:"-", dim:!hasData},
-            {label:"전일 매출", value:hasData?`${(totalRev/10000).toFixed(0)}만원`:"-", dim:!hasData},
-            {label:"7일 평균", value:hasData?`${Math.round(totalAvg7)}개/일`:"-", dim:!hasData},
-            {label:`재고 기준일 (${stockDate?fmtDate(stockDate):"-"})`, value:hasStock?`${fmt(displayed.filter(r=>r.currentStock>=0).reduce((s,r)=>s+r.currentStock,0))}개`:"-", dim:!hasStock},
+            {label:"SKU 수",value:`${displayed.length}종`},
+            {label:`전일 출고 (${latestDate?fmtDate(latestDate):"-"})`,value:hasData?`${fmt(totalOut)}개`:"-",dim:!hasData},
+            {label:"전일 매출",value:hasData?`${(totalRev/10000).toFixed(0)}만원`:"-",dim:!hasData},
+            {label:"7일 평균",value:hasData?`${fmt(totalAvg7)}개/일`:"-",dim:!hasData},
+            {label:`재고 (${stockDate?fmtDate(stockDate):"-"})`,value:hasStock?`${fmt(displayed.filter(r=>r.currentStock>=0).reduce((s,r)=>s+r.currentStock,0))}개`:"-",dim:!hasStock},
           ].map(c=>(
             <div key={c.label} style={{background:"#ebe9e2",borderRadius:8,padding:"13px 15px"}}>
               <div style={{fontSize:11,color:"#888",marginBottom:5}}>{c.label}</div>
@@ -322,158 +314,100 @@ export default function Home(){
             </div>
           ))}
         </div>
-
-        {/* 출고현황 */}
         {view==="table"&&(
           <div style={{background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",overflow:"hidden"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-              <thead>
-                <tr>
-                  <th style={TH}>카테고리</th>
-                  <th style={TH}>제품명</th>
-                  <th style={{...TH,textAlign:"right"}}>계획출고</th>
-                  <th style={{...TH,textAlign:"right"}}>전일출고{latestDate&&<span style={{fontWeight:400,color:"#bbb",marginLeft:3}}>({fmtDate(latestDate)})</span>}</th>
-                  <th style={{...TH,textAlign:"right"}}>7일 평균</th>
-                  <th style={{...TH,textAlign:"right"}}>전일 매출</th>
-                  <th style={{...TH,textAlign:"right"}}>주문건</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayed.map((row,i)=>{
-                  const c=cs(row.category);
-                  const aboveAvg=row.actualOutbound>row.avg7&&row.avg7>0;
-                  return(
-                    <tr key={row.barcode+i} style={{borderBottom:"0.5px solid #f8f7f4",background:i%2===0?"#fff":"#fdfcfa"}}>
-                      <td style={TD}><span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:20,background:c.bg,color:c.text,fontWeight:500,whiteSpace:"nowrap"}}>{row.category}</span></td>
-                      <td style={{...TD,fontWeight:500,maxWidth:220}}><span style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.name}</span></td>
-                      <td style={{...TD,textAlign:"right",color:"#aaa"}}>{row.planOutbound>0?fmt(row.planOutbound):"-"}</td>
-                      <td style={{...TD,textAlign:"right"}}>
-                        {!hasData?<span style={{color:"#ddd"}}>-</span>:row.actualOutbound>0?<span style={{color:"#A32D2D",fontWeight:600}}>{fmt(row.actualOutbound)}{aboveAvg&&<span style={{fontSize:10,marginLeft:4,color:"#1D9E75"}}>↑</span>}</span>:<span style={{color:"#ddd"}}>0</span>}
-                      </td>
-                      <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.avg7>0?<span style={{color:"#555"}}>{row.avg7}</span>:<span style={{color:"#ddd"}}>-</span>}</td>
-                      <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.revenue>0?<span style={{color:"#0F6E56",fontWeight:500}}>{fmt(row.revenue)}원</span>:<span style={{color:"#ddd"}}>-</span>}</td>
-                      <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.orders>0?fmt(row.orders):<span style={{color:"#ddd"}}>-</span>}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
+              <thead><tr>
+                <th style={TH}>카테고리</th><th style={TH}>제품명</th>
+                <th style={{...TH,textAlign:"right"}}>계획출고</th>
+                <th style={{...TH,textAlign:"right"}}>전일출고{latestDate&&<span style={{fontWeight:400,color:"#bbb",marginLeft:3}}>({fmtDate(latestDate)})</span>}</th>
+                <th style={{...TH,textAlign:"right"}}>7일 평균</th>
+                <th style={{...TH,textAlign:"right"}}>전일 매출</th>
+                <th style={{...TH,textAlign:"right"}}>주문건</th>
+              </tr></thead>
+              <tbody>{displayed.map((row,i)=>{
+                const c=cs(row.category);
+                const aboveAvg=row.actualOutbound>row.avg7&&row.avg7>0;
+                return(<tr key={row.barcode+i} style={{borderBottom:"0.5px solid #f8f7f4",background:i%2===0?"#fff":"#fdfcfa"}}>
+                  <td style={TD}><span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:20,background:c.bg,color:c.text,fontWeight:500,whiteSpace:"nowrap"}}>{row.category}</span></td>
+                  <td style={{...TD,fontWeight:500,maxWidth:220}}><span style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row.name}</span></td>
+                  <td style={{...TD,textAlign:"right",color:"#aaa"}}>{row.planOutbound>0?fmt(row.planOutbound):"-"}</td>
+                  <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.actualOutbound>0?<span style={{color:"#A32D2D",fontWeight:600}}>{fmt(row.actualOutbound)}{aboveAvg&&<span style={{fontSize:10,marginLeft:4,color:"#1D9E75"}}>↑</span>}</span>:<span style={{color:"#ddd"}}>0</span>}</td>
+                  <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.avg7>0?<span style={{color:"#555"}}>{row.avg7}</span>:<span style={{color:"#ddd"}}>-</span>}</td>
+                  <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.revenue>0?<span style={{color:"#0F6E56",fontWeight:500}}>{fmt(row.revenue)}원</span>:<span style={{color:"#ddd"}}>-</span>}</td>
+                  <td style={{...TD,textAlign:"right"}}>{!hasData?<span style={{color:"#ddd"}}>-</span>:row.orders>0?fmt(row.orders):<span style={{color:"#ddd"}}>-</span>}</td>
+                </tr>);
+              })}</tbody>
             </table>
           </div>
         )}
-
-        {/* 재고현황 — 거치대 별도 행 포함 */}
         {view==="stock"&&(
           <div style={{background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",overflow:"hidden"}}>
-            {!hasStock?(
-              <div style={{textAlign:"center",padding:"3rem",color:"#bbb"}}>
-                <div style={{fontSize:32,marginBottom:10}}>📦</div>
-                <div style={{fontSize:13,color:"#888",marginBottom:8}}>재고 파일을 업로드해주세요</div>
-                <div style={{fontSize:12,color:"#aaa"}}>왼쪽 📦 버튼으로 네이버 재고파일 업로드</div>
-              </div>
-            ):(
+            {!hasStock?(<div style={{textAlign:"center",padding:"3rem",color:"#bbb"}}><div style={{fontSize:32,marginBottom:10}}>📦</div><div style={{fontSize:13,color:"#888"}}>왼쪽 📦 버튼으로 네이버 재고파일 업로드</div></div>):(
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-                <thead>
-                  <tr>
-                    <th style={TH}>카테고리</th>
-                    <th style={TH}>제품명</th>
-                    <th style={{...TH,textAlign:"right"}}>계획출고</th>
-                    <th style={{...TH,textAlign:"right"}}>아르고 누적출고</th>
-                    <th style={{...TH,textAlign:"right"}}>네이버 재고{stockDate&&<span style={{fontWeight:400,color:"#bbb",marginLeft:3}}>({fmtDate(stockDate)})</span>}</th>
-                    <th style={{...TH,textAlign:"right"}}>차이</th>
-                    <th style={TH}>잔여</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {stockDisplayed.map((row,i)=>{
-                    const c=cs(row.category);
-                    const argoTotal=(row as SkuRow & {_argoTotal?:number})._argoTotal
-                      ?? records.reduce((s,r)=>s+(r.outbound[row.barcode]?.qty??0),0);
-                    const naverStock=row.currentStock;
-                    const expected=row.planOutbound-argoTotal;
-                    const diff=naverStock>=0?naverStock-expected:null;
-                    const pct=row.planOutbound>0?Math.min(100,Math.round((argoTotal/row.planOutbound)*100)):0;
-                    const remaining=Math.max(0,100-pct);
-                    const barColor=remaining<=20?"#E24B4A":remaining<=50?"#EF9F27":"#1D9E75";
-                    const stockColor=naverStock<0?"#bbb":naverStock<50?"#A32D2D":naverStock<100?"#BA7517":"#0F6E56";
-                    const diffColor=diff===null?"#bbb":diff>5?"#0F6E56":diff<-5?"#A32D2D":"#888";
-                    const isRack=row.barcode==="8809822422173";
-                    return(
-                      <tr key={row.barcode+i} style={{borderBottom:"0.5px solid #f8f7f4",background:isRack?"#f7fcf9":i%2===0?"#fff":"#fdfcfa"}}>
-                        <td style={TD}><span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:20,background:c.bg,color:c.text,fontWeight:500,whiteSpace:"nowrap"}}>{row.category}</span></td>
-                        <td style={{...TD,fontWeight:500,maxWidth:220}}>
-                          <span style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            {isRack&&<span style={{fontSize:10,color:"#1D9E75",marginRight:4}}>└</span>}
-                            {row.name}
-                          </span>
-                        </td>
-                        <td style={{...TD,textAlign:"right",color:"#aaa"}}>{row.planOutbound>0?fmt(row.planOutbound):<span style={{color:"#ddd"}}>-</span>}</td>
-                        <td style={{...TD,textAlign:"right",color:"#A32D2D",fontWeight:argoTotal>0?600:400}}>
-                          {argoTotal>0?`-${fmt(argoTotal)}`:<span style={{color:"#ddd"}}>0</span>}
-                        </td>
-                        <td style={{...TD,textAlign:"right",fontWeight:600,color:stockColor}}>
-                          {naverStock>=0?fmt(naverStock):<span style={{color:"#ddd"}}>-</span>}
-                        </td>
-                        <td style={{...TD,textAlign:"right",fontWeight:500,color:diffColor}}>
-                          {diff===null?<span style={{color:"#ddd"}}>-</span>:diff===0?<span style={{color:"#888"}}>0</span>:diff>0?`+${fmt(diff)}`:`${fmt(diff)}`}
-                        </td>
-                        <td style={{...TD,minWidth:120}}>
-                          {row.planOutbound>0?(
-                            <div style={{display:"flex",alignItems:"center",gap:6}}>
-                              <div style={{flex:1,height:6,background:"#f1efe8",borderRadius:4}}>
-                                <div style={{height:6,borderRadius:4,width:`${remaining}%`,background:barColor}}/>
-                              </div>
-                              <span style={{fontSize:11,color:"#888"}}>{remaining}%</span>
-                            </div>
-                          ):<span style={{color:"#ddd",fontSize:11}}>-</span>}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
+                <thead><tr>
+                  <th style={TH}>카테고리</th><th style={TH}>제품명</th>
+                  <th style={{...TH,textAlign:"right"}}>계획출고</th>
+                  <th style={{...TH,textAlign:"right"}}>아르고 누적출고</th>
+                  <th style={{...TH,textAlign:"right"}}>네이버 재고{stockDate&&<span style={{fontWeight:400,color:"#bbb",marginLeft:3}}>({fmtDate(stockDate)})</span>}</th>
+                  <th style={{...TH,textAlign:"right"}}>차이</th>
+                  <th style={TH}>잔여</th>
+                </tr></thead>
+                <tbody>{stockDisplayed.map((row,i)=>{
+                  const c=cs(row.category);
+                  const argoTotal=row._argoTotal??records.reduce((s,r)=>s+(r.outbound[row.barcode]?.qty??0),0);
+                  const naverStock=row.currentStock;
+                  const diff=naverStock>=0?naverStock-(row.planOutbound-argoTotal):null;
+                  const pct=row.planOutbound>0?Math.min(100,Math.round((argoTotal/row.planOutbound)*100)):0;
+                  const remaining=Math.max(0,100-pct);
+                  const barColor=remaining<=20?"#E24B4A":remaining<=50?"#EF9F27":"#1D9E75";
+                  const stockColor=naverStock<0?"#bbb":naverStock<50?"#A32D2D":naverStock<100?"#BA7517":"#0F6E56";
+                  const diffColor=diff===null?"#bbb":diff>5?"#0F6E56":diff<-5?"#A32D2D":"#555";
+                  return(<tr key={row.barcode+i} style={{borderBottom:"0.5px solid #f8f7f4",background:row._isRack?"#f4fbf8":i%2===0?"#fff":"#fdfcfa"}}>
+                    <td style={TD}><span style={{display:"inline-block",fontSize:11,padding:"2px 8px",borderRadius:20,background:c.bg,color:c.text,fontWeight:500,whiteSpace:"nowrap"}}>{row.category}</span></td>
+                    <td style={{...TD,fontWeight:500,maxWidth:220}}><span style={{display:"block",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{row._isRack&&<span style={{fontSize:11,color:"#1D9E75",marginRight:4}}>└</span>}{row.name}</span></td>
+                    <td style={{...TD,textAlign:"right",color:"#aaa"}}>{row.planOutbound>0?fmt(row.planOutbound):<span style={{color:"#ddd"}}>-</span>}</td>
+                    <td style={{...TD,textAlign:"right",color:"#A32D2D",fontWeight:argoTotal>0?600:400}}>{argoTotal>0?`-${fmt(argoTotal)}`:<span style={{color:"#ddd"}}>0</span>}</td>
+                    <td style={{...TD,textAlign:"right",fontWeight:600,color:stockColor}}>{naverStock>=0?fmt(naverStock):<span style={{color:"#ddd"}}>-</span>}</td>
+                    <td style={{...TD,textAlign:"right",fontWeight:500,color:diffColor}}>{diff===null?<span style={{color:"#ddd"}}>-</span>:diff===0?<span style={{color:"#888"}}>0</span>:diff>0?`+${fmt(diff)}`:`${fmt(diff)}`}</td>
+                    <td style={{...TD,minWidth:120}}>{row.planOutbound>0?(<div style={{display:"flex",alignItems:"center",gap:6}}><div style={{flex:1,height:6,background:"#f1efe8",borderRadius:4}}><div style={{height:6,borderRadius:4,width:`${remaining}%`,background:barColor}}/></div><span style={{fontSize:11,color:"#888",minWidth:30}}>{remaining}%</span></div>):<span style={{color:"#ddd",fontSize:11}}>-</span>}</td>
+                  </tr>);
+                })}</tbody>
               </table>
             )}
           </div>
         )}
-
-        {/* 날짜별 히스토리 */}
         {view==="history"&&(
           <div style={{background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",overflow:"hidden"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
-              <thead>
-                <tr>
-                  <th style={TH}>날짜</th>
-                  <th style={{...TH,textAlign:"right"}}>총 출고</th>
-                  <th style={{...TH,textAlign:"right"}}>총 매출</th>
-                  <th style={{...TH,textAlign:"right"}}>주문건</th>
-                  <th style={{...TH,textAlign:"right"}}>출고 SKU</th>
-                  <th style={TH}>카테고리별</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...records].reverse().map((rec,i)=>{
-                  const dayOut=Object.values(rec.outbound).reduce((s,v)=>s+v.qty,0);
-                  const dayRev=Object.values(rec.outbound).reduce((s,v)=>s+v.revenue,0);
-                  const dayOrd=Object.values(rec.outbound).reduce((s,v)=>s+v.orders,0);
-                  const activeSkus=Object.values(rec.outbound).filter(v=>v.qty>0).length;
-                  const catOut:Record<string,number>={};
-                  MASTER_DATA.forEach(m=>{const qty=rec.outbound[m.barcode]?.qty??0;if(qty>0)catOut[m.category]=(catOut[m.category]??0)+qty;});
-                  return(
-                    <tr key={rec.date} style={{borderBottom:"0.5px solid #f8f7f4",background:i%2===0?"#fff":"#fdfcfa"}}>
-                      <td style={{...TD,fontWeight:500}}>{rec.date}{i===0&&<span style={{marginLeft:6,fontSize:10,background:"#E6F1FB",color:"#185FA5",padding:"1px 6px",borderRadius:10}}>최신</span>}</td>
-                      <td style={{...TD,textAlign:"right",fontWeight:600,color:"#A32D2D"}}>{fmt(dayOut)}개</td>
-                      <td style={{...TD,textAlign:"right",color:"#0F6E56",fontWeight:500}}>{(dayRev/10000).toFixed(0)}만원</td>
-                      <td style={{...TD,textAlign:"right"}}>{fmt(dayOrd)}건</td>
-                      <td style={{...TD,textAlign:"right"}}>{activeSkus}종</td>
-                      <td style={TD}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{Object.entries(catOut).map(([cat,qty])=>{const c=cs(cat);return<span key={cat} style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:c.bg,color:c.text}}>{cat} {qty}</span>;})}</div></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
+              <thead><tr>
+                <th style={TH}>날짜</th>
+                <th style={{...TH,textAlign:"right"}}>총 출고</th>
+                <th style={{...TH,textAlign:"right"}}>총 매출</th>
+                <th style={{...TH,textAlign:"right"}}>주문건</th>
+                <th style={{...TH,textAlign:"right"}}>출고 SKU</th>
+                <th style={TH}>카테고리별</th>
+              </tr></thead>
+              <tbody>{[...records].reverse().map((rec,i)=>{
+                const dayOut=Object.values(rec.outbound).reduce((s,v)=>s+v.qty,0);
+                const dayRev=Object.values(rec.outbound).reduce((s,v)=>s+v.revenue,0);
+                const dayOrd=Object.values(rec.outbound).reduce((s,v)=>s+v.orders,0);
+                const activeSkus=Object.values(rec.outbound).filter(v=>v.qty>0).length;
+                const catOut:Record<string,number>={};
+                MASTER_DATA.forEach(m=>{const qty=rec.outbound[m.barcode]?.qty??0;if(qty>0)catOut[m.category]=(catOut[m.category]??0)+qty;});
+                return(<tr key={rec.date} style={{borderBottom:"0.5px solid #f8f7f4",background:i%2===0?"#fff":"#fdfcfa"}}>
+                  <td style={{...TD,fontWeight:500}}>{rec.date}{i===0&&<span style={{marginLeft:6,fontSize:10,background:"#E6F1FB",color:"#185FA5",padding:"1px 6px",borderRadius:10}}>최신</span>}</td>
+                  <td style={{...TD,textAlign:"right",fontWeight:600,color:"#A32D2D"}}>{fmt(dayOut)}개</td>
+                  <td style={{...TD,textAlign:"right",color:"#0F6E56",fontWeight:500}}>{(dayRev/10000).toFixed(0)}만원</td>
+                  <td style={{...TD,textAlign:"right"}}>{fmt(dayOrd)}건</td>
+                  <td style={{...TD,textAlign:"right"}}>{activeSkus}종</td>
+                  <td style={TD}><div style={{display:"flex",gap:4,flexWrap:"wrap"}}>{Object.entries(catOut).map(([cat,qty])=>{const c=cs(cat);return<span key={cat} style={{fontSize:10,padding:"1px 7px",borderRadius:20,background:c.bg,color:c.text}}>{cat} {qty}</span>;})}</div></td>
+                </tr>);
+              })}</tbody>
             </table>
             {records.length===0&&<div style={{textAlign:"center",padding:"3rem",color:"#bbb",fontSize:13}}>업로드된 기록이 없어요</div>}
           </div>
         )}
-
         {hasData&&view==="table"&&activeTab==="전체"&&(
           <div style={{marginTop:"1.5rem",background:"#fff",borderRadius:12,border:"0.5px solid #e5e4de",padding:"1.25rem"}}>
             <p style={{fontSize:11,fontWeight:500,color:"#aaa",letterSpacing:"0.05em",marginBottom:14}}>카테고리별 전일 출고 비중</p>
@@ -483,26 +417,21 @@ export default function Home(){
                 const allOut=rows.reduce((s,r)=>s+r.actualOutbound,0);
                 const pct=allOut>0?(catOut/allOut)*100:0;
                 const c=cs(cat);
-                return(
-                  <div key={cat} style={{display:"flex",alignItems:"center",gap:12}}>
-                    <div style={{width:60,fontSize:12,color:"#888",textAlign:"right"}}>{cat}</div>
-                    <div style={{flex:1,height:8,background:"#f1efe8",borderRadius:4}}>
-                      <div style={{height:8,borderRadius:4,width:`${pct}%`,background:c.dot}}/>
-                    </div>
-                    <div style={{fontSize:12,color:"#555",width:50}}>{fmt(catOut)}개</div>
-                    <div style={{fontSize:11,color:"#bbb",width:40}}>{pct.toFixed(1)}%</div>
-                  </div>
-                );
+                return(<div key={cat} style={{display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{width:60,fontSize:12,color:"#888",textAlign:"right"}}>{cat}</div>
+                  <div style={{flex:1,height:8,background:"#f1efe8",borderRadius:4}}><div style={{height:8,borderRadius:4,width:`${pct}%`,background:c.dot}}/></div>
+                  <div style={{fontSize:12,color:"#555",width:50}}>{fmt(catOut)}개</div>
+                  <div style={{fontSize:11,color:"#bbb",width:40}}>{pct.toFixed(1)}%</div>
+                </div>);
               })}
             </div>
           </div>
         )}
-
         {!hasData&&!loading&&(
           <div style={{textAlign:"center",padding:"5rem 0",color:"#bbb"}}>
             <div style={{fontSize:40,marginBottom:12}}>📦</div>
             <div style={{fontSize:14,color:"#888"}}>출고 파일 또는 재고 파일을 업로드해주세요</div>
-            <div style={{fontSize:12,marginTop:6}}>출고: 아르고 OUTBOUND 파일 · 재고: 네이버 skuInventoryList 파일</div>
+            <div style={{fontSize:12,marginTop:6}}>출고: 아르고 OUTBOUND · 재고: 네이버 skuInventoryList</div>
           </div>
         )}
       </div>
