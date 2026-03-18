@@ -197,13 +197,15 @@ export default function Home(){
     reader.onload=async e=>{
       const wb=XLSX.read(e.target?.result,{type:"array"});
       const ws=wb.Sheets[wb.SheetNames[0]];
-      const raw=XLSX.utils.sheet_to_json<Record<string,unknown>>(ws,{defval:"",range:3});
+      // 네이버 재고파일: 1~2행 설명, 3행 헤더, 4행부터 데이터
+      const raw=XLSX.utils.sheet_to_json<Record<string,unknown>>(ws,{defval:"",range:2});
       const upsertRows:Array<{barcode:string;qty:number;snapshot_date:string;updated_at:string}>=[];
       for(const r of raw){
-        const bc=r["바코드"]?String(typeof r["바코드"]==="number"?Math.round(r["바코드"] as number):r["바코드"]).trim():"";
-        const qty=Number(r["판매가능 재고수량"]??0);
-        if(!bc)continue;
-        upsertRows.push({barcode:bc,qty,snapshot_date:snapDate,updated_at:new Date().toISOString()});
+        const bc=r["바코드"]?String(r["바코드"]).trim():"";
+        const qtyRaw=r["판매가능 재고수량"];
+        const qty=qtyRaw===undefined||qtyRaw===""?0:Number(qtyRaw);
+        if(!bc||bc==="바코드")continue;
+        upsertRows.push({barcode:bc,qty:isNaN(qty)?0:qty,snapshot_date:snapDate,updated_at:new Date().toISOString()});
       }
       const sb=sbRef.current??getSupabase();
       const{error}=await sb.from("current_stock").upsert(upsertRows,{onConflict:"barcode"});
